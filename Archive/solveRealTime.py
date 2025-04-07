@@ -26,11 +26,11 @@ def solveRT(mgi, cems, SH, PH, CH):
     cems_V_rt = {i: {} for i in mgm_rt.keys()}  # Dictionary to save real time V
     cems_Obj_rt = {}  # Dictionary to save real time deviation
     # Load day ahead solutions for MGs
-    with open('results/dayAheadMGs.pkl', 'rb') as handle:
+    with open('../Performance/dayAheadMGs.pkl', 'rb') as handle:
         mg_Ymax, mg_Lmax, mg_Z, mg_Xes, mg_Xpv, mg_Xdg = pkl.load(handle)
     handle.close()
     # Load day ahead solutions for CEMS
-    with open('results/dayAheadCEMS.pkl', 'rb') as handle:
+    with open('../Performance/dayAheadCEMS.pkl', 'rb') as handle:
         V, R, K, _EA, _ER, _ES = pkl.load(handle)
     handle.close()
 
@@ -96,10 +96,10 @@ def solveRT(mgi, cems, SH, PH, CH):
 
 
     # Save real time results for reporting
-    with open('results/realTimeMGs.pkl', 'wb') as handle:
+    with open('../Performance/realTimeMGs.pkl', 'wb') as handle:
         pkl.dump([mg_Obj_rt, mg_Z_rt, mg_Y_rt], handle)
     handle.close()
-    with open('results/realTimeCEMS.pkl', 'wb') as handle:
+    with open('../Performance/realTimeCEMS.pkl', 'wb') as handle:
         pkl.dump([cems_Obj_rt, cems_V_rt], handle)
     handle.close()
 

@@ -27,7 +27,7 @@ def solveDAMGs(mgi, SH):
         mg_Ymax[mg] = {t: max([mgm[mg].getVarByName(f'Y[{t},{s}]').x for s in range(len(mgi[mg].ps))]) for t in T_range}
 
     # Save results for the day
-    with open('results/dayAheadMGs.pkl', 'wb') as handle:
+    with open('../Performance/dayAheadMGs.pkl', 'wb') as handle:
         pkl.dump([mg_Ymax, mg_Lmax, mg_Z, mg_Xes, mg_Xpv, mg_Xdg], handle)
     handle.close()
 
@@ -37,7 +37,7 @@ def solveDACEMS(cems, mgi, SH):
     I_range = range(I)
     T_range = range(SH)
     # Load results for the day
-    with open('results/dayAheadMGs.pkl', 'rb') as handle:
+    with open('../Performance/dayAheadMGs.pkl', 'rb') as handle:
         mg_Ymax, mg_Lmax, mg_Z, mg_Xes, mg_Xpv, mg_Xdg = pkl.load(handle)
     handle.close()
 
@@ -59,7 +59,7 @@ def solveDACEMS(cems, mgi, SH):
             V[i][t] = cems_model.getVarByName(f'V[{i},{t}]').x
             R[i][t] = cems_model.getVarByName(f'R[{i},{t}]').x
 
-    with open('results/dayAheadCEMS.pkl', 'wb') as handle:
+    with open('../Performance/dayAheadCEMS.pkl', 'wb') as handle:
         pkl.dump([V, R, K, _EA, _ER, _ES], handle)
     handle.close()
 
