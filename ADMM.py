@@ -1,38 +1,29 @@
 """ This file is ADMM integrated as an environment with DRL"""
 import copy
-import math
 from Functions import *
-from EarlyStopping import EarlyStopping
 import gym
 import numpy as np
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from tqdm import tqdm
-import matplotlib.pyplot as plt
 
 
-
-
+############################## Configuration #########################
 @dataclass
 class ADMM_config:
-    prim_eps: float = 0.05
-    dual_eps: float = 0.05
-    rand_rho: bool = False
-    rho_init: float = 1
-    xi: float = 1e-5
-    mu: float = 10.
-    tau_incr: float = 2.
-    tau_decr: float = 2.
+    yhat_epsilon: float = 0.01
+    z_epsilon: float = 0.01
 
-    def __init__(self, I, HL):
-        self.yhat_init =  100 * np.ones((4, I, I, HL))
-        self.z1_init =  np.zeros((I, HL))
-        self.z2_init =  np.zeros((I, HL))
+    def __init__(self, y_shape, x_shape, is_lp_box):
+        self.is_lp_box = is_lp_box
+        self.yhat_init = 100 * np.ones(y_shape)
+        self.l_yhat_init = np.zeros(y_shape)
 
-        self.l_yhat_init = np.zeros((4, I, I, HL))
-        self.l_z1_init = np.zeros((I, HL))
-        self.l_z2_init = np.zeros((I, HL))
+        if is_lp_box:
+            self.z2_init = np.zeros(x_shape)
+            self.l_z2_init = np.zeros(x_shape)
 
 
+############################## ADMM ENV #########################
 class ADMM_env:
     def __init__(self, f, g, config: ADMM_config):
         # Sub-problems f: f(x, y), g: g(yhat)
@@ -42,230 +33,360 @@ class ADMM_env:
         self.config = config
         # Reset History
         self.info = self.initialize_info()
+        if self.config.is_lp_box:
+            self.num_rhos = 2
+            self.center = 0.5 * np.ones_like(self.info['z2'].shape[1])
+            r = np.sqrt(self.center.size)/2
+            self.radius = r
+        else:
+            self.num_rhos = 1
 
-    def step(self):
-        """
-        :param info: yhat, z1, z2, l_yhat, l_z1, l_z2, rho_yhat, rho_z1, rho_z2
-        :return: info
-        """
+    def step(self, rhos, gamma0, gamma1, eta):
+        yhat = self.info['yhat']
+        l_yhat = self.info['l_yhat']
+        rho_yhat = rhos[0]
 
         # Solve f
-        y_new, x_new = solve_f(f=self.f, info=self.info, xi=self.config.xi)
-
-        # Box projection of x_new: the same shape
-        z1_new = project_to_box(x=x_new)
-
-        # Sphere projection of x_new: the same shape
-        z2_new = project_to_sphere(x=x_new)
+        y_new, x_new = self.solve_f(rhos=rhos)
 
         # Solve g
-        yhat_new = self.g.solve_with(y=y_new, info=self.info, xi=self.config.xi)
+        yhat_new = self.g.solve_with(y=y_new, rho_yhat=rho_yhat, l_yhat=l_yhat)
 
-        # Update dual variables
-        l_yhat_new = update_grad_ascent(info=self.info, keyword='yhat', grad=y_new - yhat_new)
-        l_z1_new = update_grad_ascent(info=self.info, keyword='z1', grad=x_new - z1_new)
-        l_z2_new = update_grad_ascent(info=self.info, keyword='z2', grad=x_new - z2_new)
+        # Primal and Dual residuals for yhat
+        p_r_2_yhat = np.linalg.norm(y_new - yhat_new)
+        d_r_2_yhat = np.linalg.norm(rho_yhat * (yhat_new - yhat))
 
-        # Get residuals
-        stacked_prim_vars = np.concatenate((y_new.flatten(), x_new.flatten(), x_new.flatten()))
-        stacked_auxi_vars = np.concatenate((yhat_new.flatten(), z1_new.flatten(), z2_new.flatten()))
-        stacked_auxi_vars_rhoed = np.concatenate((self.info['rho_yhat'] * yhat_new.flatten(),
-                                            self.info['rho_z1'] * z1_new.flatten(),
-                                            self.info['rho_z2'] * z2_new.flatten()))
-        stacked_auxi_vars_rhoed_old = np.concatenate((self.info['rho_yhat'] * self.info['yhat'].flatten(),
-                                          self.info['rho_z1'] * self.info['z1'].flatten(),
-                                          self.info['rho_z2'] * self.info['z2'].flatten()))
+        # Update dual variables for yhat
+        l_yhat_new = l_yhat + rho_yhat * (y_new - yhat_new)
 
-        r_p_l2 = get_prim_residual(prim_vars=stacked_prim_vars, auxi_vars=stacked_auxi_vars)
-        r_d_l2 = get_dual_residual(auxi_vars=stacked_auxi_vars_rhoed, auxi_vars_old=stacked_auxi_vars_rhoed_old)
+        # Update yhat and x related info
+        self.update_info(yhat_new=yhat_new, l_yhat_new=l_yhat_new, x_new=x_new)
+
+        # Project and update if lp_box
+        if self.config.is_lp_box:
+            z1 = self.info['z1']
+            z2 = self.info['z2']
+            l_z1 = self.info['l_z1']
+            l_z2 = self.info['l_z2']
+            rho_z1 = rhos[1]
+            rho_z2 = rhos[2]
+
+            # Update z1
+            z1_new = self.info['z1']
+
+            ### Update z2
+            z2_new = self.update_z2(z2=z2, l_z2=l_z2, rho_z2=rho_z2,
+                                    x=x_new, gamma0=gamma0, gamma1=gamma1,
+                                    eta=eta)
+
+            # Update dual variables
+            l_z1_new = l_z1 + rho_z1 * (x_new - z1_new)
+            l_z2_new = l_z2 + rho_z2 * (x_new - z2_new)
+
+            # Squared norm of residuals
+            p_r_2_z1 = np.linalg.norm(x_new - z1_new)
+            d_r_2_z1 =  np.linalg.norm(rho_z1 * (z1_new - z1))
+            p_r_2_z2 =  np.linalg.norm(x_new - z2_new)
+            d_r_2_z2 =  np.linalg.norm(rho_z2 * (z2_new - z2))
+
+            # Update z1 and z2 related info
+            self.update_info_lp_box(z1_new=z1_new, z2_new=z2_new, l_z1_new=l_z1_new, l_z2_new=l_z2_new)
+        else:
+            p_r_2_z1, d_r_2_z1 =  0, 0
+            p_r_2_z2, d_r_2_z2 = 0, 0
 
         # Check convergence
-        done = check_convergence(prim_eps=self.config.prim_eps, dual_eps=self.config.dual_eps,
-                                 prim_res=r_p_l2, dual_res=r_d_l2, x=x_new)
+        r_yhat_l2 = np.sqrt(p_r_2_yhat + d_r_2_yhat)
+        r_z1_l2 = np.sqrt(p_r_2_z1 + d_r_2_z1)
+        r_z2_l2 = np.sqrt(p_r_2_z2 + d_r_2_z2)
+        done = all([
+            r_yhat_l2 <= self.config.yhat_epsilon,
+            r_z1_l2 <= self.config.z_epsilon,
+            r_z2_l2 <= self.config.z_epsilon
+        ])
+
+        # Separated residuals
+        p_r_separated = [np.sqrt(p_r_2_yhat), np.sqrt(p_r_2_z1), np.sqrt(p_r_2_z2)]
+        d_r_separated = [np.sqrt(d_r_2_yhat), np.sqrt(d_r_2_z1), np.sqrt(d_r_2_z2)]
+        r_separated = [p_r_separated, d_r_separated]
 
 
-
-        # Update info: new vars
-        self.info = update_info(self.info, yhat_new, z1_new, z2_new, l_yhat_new, l_z1_new, l_z2_new)
-
-        return done, self.info, r_p_l2, r_d_l2, x_new
+        return done, r_separated, self.info, x_new
 
     def reset(self):
-        # Reset History
         self.info = self.initialize_info()
 
-    def update_rhos(self):
-        pass
+    def update_z1(self, z1, l_z1, rho_z1, x, gamma0, gamma1, eta):
+        lagrang_G = -l_z1 - rho_z1 * (x - z1)
+        negative_G = gamma0 * np.minimum(2 * z1, 0)
+        positive_G = gamma1 * np.maximum(2 * (z1 - 1), 0)
+        G = lagrang_G + negative_G + positive_G
+        z1_new = z1 - eta * G
+        return z1_new
+
+    def update_z2(self, z2, l_z2, rho_z2, x, gamma0, gamma1, eta):
+        # Riemannain gradient
+        lagrang_G = -l_z2 - rho_z2 * (x - z2)
+        negative_G = gamma0 * np.minimum(2 * z2, 0)
+        positive_G = gamma1 * np.maximum(2 * (z2 - 1), 0)
+        G = lagrang_G + negative_G + positive_G
+        v = z2 - self.center
+        r2 = self.radius ** 2
+        vvT = np.array([vi[:, None] @ vi[:, None].T for vi in v])
+        vvT_unit = vvT / r2
+        vvTG = np.array([vvTi @ gi for gi, vvTi in zip(G, vvT_unit)])
+        grad_G = G - vvTG
+
+        z2_new = z2 - eta * grad_G
+        z2_new = self.project_to_surface(z2_new)
+        return z2_new
 
     def initialize_info(self):
-        info = {key: None for key in ['yhat', 'z1', 'z2',
-                                      'l_yhat', 'l_z1', 'l_z2',
-                                      'rho_yhat', 'rho_z1', 'rho_z2']}
+        info = dict({})
         info['yhat'] = self.config.yhat_init
-        info['z1'] = self.config.z1_init
-        info['z2'] = self.config.z2_init
-
         info['l_yhat'] = self.config.l_yhat_init
-        info['l_z1'] = self.config.l_z1_init
-        info['l_z2'] = self.config.l_z2_init
+        info['x'] = None
 
-        info['rho_yhat'] = self.config.rho_init
-        info['rho_z1'] = self.config.rho_init
-        info['rho_z2'] = self.config.rho_init
+        if self.config.is_lp_box:
+            info['z1'] = self.config.z1_init
+            info['l_z1'] = self.config.l_z1_init
+            info['z2'] = self.config.z2_init
+            info['l_z2'] = self.config.l_z2_init
 
         return info
 
-    @staticmethod
-    def update_info(info: dict, yhat_new, z1_new, z2_new, l_yhat_new, l_z1_new, l_z2_new):
-        info['yhat'] = yhat_new
-        info['z1'] = z1_new
-        info['z2'] = z2_new
+    def project_to_surface(self, var):
+        v = var - self.center
+        v_norm = np.linalg.norm(v, axis=1)
+        v_unit = np.array([nom / denom for nom, denom in zip(v, v_norm)])
+        var_new = self.center + self.radius * v_unit
+        return var_new
 
-        info['l_yhat'] = l_yhat_new
-        info['l_z1'] = l_z1_new
-        info['l_z2'] = l_z2_new
-        return info
+    def update_info(self, yhat_new, l_yhat_new,  x_new):
+        self.info['yhat'] = yhat_new
+        self.info['l_yhat'] = l_yhat_new
+        self.info['x'] = x_new
 
+    def update_info_lp_box(self, z1_new, l_z1_new, z2_new, l_z2_new):
+        self.info['z1'] = z1_new
+        self.info['l_z1'] = l_z1_new
+        self.info['z2'] = z2_new
+        self.info['l_z2'] = l_z2_new
 
-class RL_ADMM_Env(gym.Env):
-    def __init__(self, env: ADMM_env):
-        super(RL_ADMM_Env, self).__init__()
+    def solve_f(self, rhos):
+        y_new, x_new = [], []
 
-        # ADMM Env
-        self.env = env
+        for i, fi in enumerate(self.f):
+            kwargs = {
+                'yhat': self.info['yhat'][:, i, :, :],
+                'l_yhat': self.info['l_yhat'][:, i, :, :],
+                'rho_yhat': rhos[0],
+            }
 
-        # Action space
-        self.action_space = gym.spaces.Box(low=env.config.action_min, high=env.config.action_max, dtype=np.float32)
-        # Env initialization
-        self.state = None
-        self.state_dim = None
-        self.state_feats = None
-        self.vars = None
-        self.dual_vars = None
-        self.rhos = None
-        self.reset()
+            if self.config.is_lp_box:
+                kwargs.update({
+                    'z1': self.info['z1'][i, :],
+                    'l_z1': self.info['l_z1'][i, :],
+                    'rho_z1': rhos[1],
+                    'z2': self.info['z2'][i, :],
+                    'l_z2': self.info['l_z2'][i, :],
+                    'rho_z2': rhos[2],
+                })
+            y, x = fi.solve_with(**kwargs)
+            y_new.append(y)
+            x_new.append(x)
 
+        y_new = np.transpose(np.stack(y_new, axis=0), (1, 0, 2, 3))
+        x_new = np.stack(x_new, axis=0)
 
-    def step(self, action):
-        # Build info
-
-        '''# ADMM itr
-        self.env.step(info)
-
-        # Compute reward
-        reward = get_RTI_reward(r_p=r_p_l2, r_d=r_d_l2,
-                                r_p_past=self.state_feats['r_p_l2'],
-                                r_d_past=self.state_feats['r_d_l2'],
-                                weights=self.config.trend_weights)
-
-        # Update state
-        new_state = self.transition(rhos=rho_new, r_p_l2=r_p_l2, r_d_l2=r_d_l2)
-
-        # Update state
-        self.state = new_state
-
-        # Update environment parameters
-        self.update_repo(yhat=yhat_new, l=l_new, rho=rho_new, r_p_l2=r_p_l2, r_d_l2=r_d_l2)
-
-        return new_state, reward, done, self.repo'''
-
-    def reset(self, seed=None, options=None):  # required for GYM reset methods
-        r_trend = np.full(self.config.trend_period, 1e4)
-
-        # Build initial repository
-        self.build_history()
-
-        # Build state
-        self.state_feats = {
-            'rhos': self.rhos.values(),
-            'r_p_l2': r_trend,
-            'r_d_l2': r_trend}
-
-        self.state = flatten_dictionary(self.state_feats)
-        self.state_dim = self.state.size
-
-    def transition(self, r_p_l2, r_d_l2):
-        self.state_feats['r_p_l2'] = np.roll(self.state_feats['r_p_l2'], -1)
-        self.state_feats['r_p_l2'][-1] = r_p_l2
-
-        self.state_feats['r_d_l2'] = np.roll(self.state_feats['r_d_l2'], -1)
-        self.state_feats['r_d_l2'][-1] = r_d_l2
-
-        self.state_feats['rhos'] = self.rhos.values()
-
-        return flatten_dictionary(self.state_feats)
-
-    def build_history(self):
-        self.vars = {
-            'yhat': copy.copy(self.config.yhat_init),
-            'z1': copy.copy(self.config.z1_init),
-            'z2': copy.copy(self.config.z2_init)
-        }
-        self.dual_vars = {
-            'yhat': copy.copy(self.config.l_yhat_init),
-            'z1': copy.copy(self.config.l_z1_init),
-            'z2': copy.copy(self.config.l_z2_init)
-        }
-        self.rhos = {
-            'yhat': self.initialize_rho(),
-            'z1': self.initialize_rho(),
-            'z2': self.initialize_rho()
-        }
+        return y_new, x_new
 
 
-    def update_history(self, yhat, z1, z2, l_yhat, l_z1, l_z2, rho, r_p_l2, r_d_l2):
-        self.repo['yhat'] = yhat
-        self.repo['z1'] = z1
-        self.repo['z2'] = z2
-        self.repo['l_yhat'] = l_yhat
-        self.repo['l_z1'] = l_z1
-        self.repo['l_z2'] = l_z2
-        self.repo['rho'] = rho
-        self.repo['r_p_l2'] = r_p_l2
-        self.repo['r_d_l2'] = r_d_l2
+############################## Run ADMM Config #########################
+@dataclass
+class ADMM_run_config:
+    # For run itself
+    mu_yhat: float = 10
+    mu_z1: float = 10
+    mu_z2: float = 10
+    tau_incr: float = 2
+    tau_decr: float = 2
 
-    def initialize_rho(self):
-        return self.action_space.sample() if self.config.rand_rho else self.config.rho_init
+    # For env
+    rho_yhat: float = 1e-9
+    rho_z1: float = 10
+    rho_z2: float = 10
+    gamma0: float = 100.0
+    gamma1: float = 100.0
+    eta: float = 1e-2
 
-    def update_rhos(self, rhos_new):
-        self.rhos['yhat'] = rhos_new[0]
-        self.rhos['z1'] = rhos_new[1]
-        self.rhos['z2'] = rhos_new[2]
 
-
-def ADMM_run(admm_env: ADMM_env, max_itr):
-    # Algorithm params
-    itr = 1
-    done = False
+############################## Run ADMM #########################
+def ADMM_run(admm_env: ADMM_env, config: ADMM_run_config, name_to_save, max_itr):
+    # env params
+    kwargs = {
+        'rhos': [config.rho_yhat, config.rho_z1, config.rho_z2],
+        'gamma0': config.gamma0,
+        'gamma1': config.gamma1,
+        'eta': config.eta}
 
     # Info to save
-    r_p_l2_hist, r_d_l2_hist = [], []
+    x_hist = []
+    r_p_separated_hist = {key: [] for key in ['yhat', 'z1', 'z2']}
+    r_d_separated_hist = {key: [] for key in ['yhat', 'z1', 'z2']}
+    rhos_hist = []  # rho_yhat, rho_z1, rho_z2
+
+    # Reset env
+    admm_env.reset()
 
     # Algorithm
-    with tqdm(initial=1, total=max_itr, desc='Progress: ') as pbar:
+    itr = 1
+    done = False
+    with tqdm(initial=0, total=max_itr, desc='Progress: ') as pbar:
         while not done and itr <= max_itr:
-            done, info, r_p_l2, r_d_l2, x = admm_env.step()
-            r_p_l2_hist.append(r_p_l2)
-            r_d_l2_hist.append(r_d_l2)
+            done, r_separated, info, x = admm_env.step(**kwargs)
+            r_p_separated, r_d_separated = r_separated[0], r_separated[1]
 
-            # Update rhos
-            if r_p_l2 >= admm_env.config.mu * r_d_l2:
-                rho_coef = admm_env.config.tau_incr
-            elif r_d_l2 >= admm_env.config.mu * r_p_l2:
-                rho_coef = 1 / admm_env.config.tau_decr
-            else:
-                rho_coef = 1
-            info['rho_yhat'] *= rho_coef
-            info['rho_z1'] *= rho_coef
-            info['rho_z2'] *= rho_coef
+            r_p_separated_hist['yhat'].append(r_p_separated[0])
+            r_p_separated_hist['z1'].append(r_p_separated[1])
+            r_p_separated_hist['z2'].append(r_p_separated[2])
+
+            r_d_separated_hist['yhat'].append(r_d_separated[0])
+            r_d_separated_hist['z1'].append(r_d_separated[1])
+            r_d_separated_hist['z2'].append(r_d_separated[2])
+            x_hist.append(x)
+
+            # Update rhos separately
+            yhat_coef = (
+                config.tau_incr if r_p_separated[0] >= config.mu_yhat * r_d_separated[0]
+                else 1 / config.tau_decr if r_d_separated[0] >= config.mu_yhat * r_p_separated[0]
+                else 1)
+            z1_coef = (
+                config.tau_incr if r_p_separated[1] >= config.mu_z1 * r_d_separated[1]
+                else 1 / config.tau_decr if r_d_separated[1] >= config.mu_z2 * r_p_separated[1]
+                else 1)
+            z2_coef = (
+                config.tau_incr if r_p_separated[2] >= config.mu_z2 * r_d_separated[2]
+                else 1 / config.tau_decr if r_d_separated[2] >= config.mu_z2 * r_p_separated[2]
+                else 1)
+            kwargs['rhos'][0] *= yhat_coef
+            kwargs['rhos'][1] *= z1_coef
+            kwargs['rhos'][2] *= z2_coef
+            kwargs['eta'] *= 0.97
+
+            # Save rhos
+            rhos_hist.append(kwargs['rhos'])
 
             # Iterate
             itr += 1
             pbar.update(1)
 
-    # Plot
-    plot_prim_dual_res(r_p_l2_hist, r_d_l2_hist)
-
+    plot_residuals(r_p_separated_hist, r_d_separated_hist, name_to_save+'sep_residual')
     # Return
-    return info, x
+    return info, kwargs['rhos'], x_hist
+
+
+def plot_residuals(r_p_separated, r_d_separated, name):
+    fig, axs = plt.subplots(2, 1, figsize=(6, 5))
+    plt.subplots_adjust(hspace=0.6)
+    colors = {'yhat': 'red', 'z2': 'blue'}
+    for key, value in r_p_separated.items():
+        if key != 'z1':
+            axs[0].plot(value, label=key, color=colors[key])
+            axs[0].set_title('Primal Residuals')
+    for key, value in r_d_separated.items():
+        if key != 'z1':
+            axs[1].plot(value, label=key, color=colors[key])
+            axs[1].set_title('Dual Residuals')
+
+    for ax in axs:
+        ax.legend()
+        ax.set_xlabel('Iteration')
+        ax.set_ylabel('Residual (L2 Norm)')
+
+    plt.savefig(f'Performance/{name}.jpg', dpi=300)
+    plt.close()
+
+############################## RL ADMM Configuration #########################
+@dataclass
+class DRL_config:
+    action_min: float = 0.00001
+    action_max: float = 1000
+    trend_period: int = 5
+    trend_weights: np.ndarray = np.array([0.1, 0.1, 0.2, 0.3, 0.3])
+
+
+############################## RL ADMM ENV #########################
+class DRL_ADMM_env(gym.Env):
+    def __init__(self, env: ADMM_env, config: DRL_config):
+        super(DRL_ADMM_env, self).__init__()
+        # ADMM Env
+        self.env = env
+        # Action
+        self.action_dim = self.env.num_rhos
+        self.action_space = gym.spaces.Box(low=config.action_min, high=config.action_max,
+                                           shape=(self.action_dim,), dtype=np.float32)
+        self.config = config
+        # Env initialization
+        self.state = None
+        self.state_dim = None
+        self.state_feats = None
+        self.reset()
+
+    def step(self, action):
+        # ADMM itr
+        done, r_p_l2, r_d_l2, info, _ = self.env.step(action)
+        residuals = [r_p_l2, r_d_l2]
+
+        # Compute reward
+        reward = self.get_reward(r_p_l2=r_p_l2, r_d_l2=r_d_l2, done=done)
+
+        # Update state
+        new_state = self.transition(rhos=action, r_p_l2=r_p_l2, r_d_l2=r_d_l2)
+
+        # Update state
+        self.state = new_state
+
+        return new_state, reward, done, residuals, info
+
+    def reset(self, seed=None, options=None):
+        # Initialize info in ADMM-env
+        self.env.reset()
+        init_rhos = self.action_space.sample()
+
+        # Build state features and flatten
+        self.state_feats = {
+            'rho_yhat': init_rhos[0],
+            'l2_norm_p': np.full(self.config.trend_period, 100),
+            'l2_norm_d': np.full(self.config.trend_period, 100)}
+        # Add state of lp_box if True
+        if self.env.config.is_lp_box:
+            self.state_feats['rho_z1'] = init_rhos[1],
+            self.state_feats['rho_z2'] = init_rhos[2],
+
+        self.state = flatten_dictionary(self.state_feats)
+        self.state_dim = self.state.size
+
+    def get_reward(self, r_p_l2, r_d_l2, done):
+        r_tilde = np.average(self.state_feats['l2_norm_p'] + self.state_feats['l2_norm_p'], weights=self.config.trend_weights)
+        r = r_p_l2 + r_d_l2
+        r_compare = max(-100, (r_tilde - r)/r_tilde)
+        r_converge = self.config.convergence_reward if done else 0
+        return r_compare + r_converge
+
+    def transition(self, rhos, r_p_l2, r_d_l2):
+        self.state_feats['l2_norm_p'] = np.roll(self.state_feats['l2_norm_p'], -1)
+        self.state_feats['l2_norm_p'][-1] = r_p_l2
+
+        self.state_feats['l2_norm_d'] = np.roll(self.state_feats['l2_norm_d'], -1)
+        self.state_feats['l2_norm_d'][-1] = r_d_l2
+
+        self.state_feats['rho_yhat'] = rhos[0]
+
+        if self.env.config.is_lp_box:
+            self.state_feats['rho_z1'] = rhos[1]
+            self.state_feats['rho_z2'] = rhos[2]
+
+        return flatten_dictionary(self.state_feats)
+
 

@@ -8,7 +8,7 @@ import math
 
 
 def getMGData(n_mgs, id, horizon_len):
-    data = pd.read_csv('SystemInfo/data_microgrids.csv', index_col='mg number')
+    data = pd.read_csv('SystemInfo\data_microgrids.csv', index_col='mg number')
     private_data = {c: data[c].iloc[id] for c in data.columns}
     private_data['n_mgs'] = n_mgs
     private_data['id'] = id
@@ -18,8 +18,7 @@ def getMGData(n_mgs, id, horizon_len):
     private_data['probs'] = np.array(pd.read_csv(f'SystemInfo/Probs.csv')['prob'].values)
     private_data['n_scen'] = len(private_data['probs'])
     sd = pd.read_csv(f'SystemInfo/PV_{id}.csv')
-    private_data['pv_s'] = np.array([np.array(sd[f'scen0'].values[:horizon_len])
-                               for _ in range(private_data['n_scen'])])
+    private_data['pv_hourly'] = sd[f'scen0'].values[:horizon_len]
     sd = pd.read_csv(f'SystemInfo/Load_{id}.csv')
     private_data['l_s'] = np.array([private_data['n_households'] *
                                     np.array(sd[f'scen{s}'].values[:horizon_len])
@@ -37,17 +36,13 @@ def getMGData(n_mgs, id, horizon_len):
     private_data['CO2'] = rd['co2(kg/kwh)'].iloc[0]
 
 
-    private_data['C_t_min'] = -horizon_len * private_data['pay_max'] * (private_data['es'] + private_data['pv'] + private_data['dg'])
-    private_data['C_t_max'] = horizon_len * \
-                         (private_data['pay_max'] * (private_data['es'] + private_data['l_max']) +
-                          private_data['dg_cost'] * private_data['dg'] +
-                          private_data['es_cost'] * private_data['es'] +
-                          private_data['lsp'] * private_data['l_max'])
+    private_data['C_t_min'] = -1000
+    private_data['C_t_max'] = 2000
 
 
     subsidy_data = pd.read_csv(f'SystemInfo/data_regulatory.csv')
-    private_data['fsrr'] = subsidy_data['financial subsidy rate'].iloc[0] * private_data['sv']
-    private_data['usrr'] = subsidy_data['utility subsidy rate'].iloc[0] * private_data['sv']
+    private_data['fsrr'] = subsidy_data['financial subsidy rate'].iloc[0] * (0.5 + private_data['sv']) / 1.5
+    private_data['usrr'] = subsidy_data['utility subsidy rate'].iloc[0] * (0.5 + private_data['sv']) / 1.5
 
     # public data
     public_data = {'fsrr':private_data['fsrr'], 'usrr': private_data['usrr']}
