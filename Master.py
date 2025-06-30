@@ -1,27 +1,11 @@
 import gurobipy as gp
 from gurobipy import GRB, quicksum
 import numpy as np
-status = {1: 'LOADED',
-         2: 'OPTIMAL',
-         3: 'INFEASIBLE',
-         4: 'INF_OR_UNBD',
-         5: 'UNBOUNDED',
-         6: 'CUTOFF',
-         7: 'ITERATION_LIMIT',
-         8: 'NODE_LIMIT',
-         9: 'TIME_LIMIT',
-         10: 'SOLUTION_LIMIT',
-         11: 'INTERRUPTED',
-         12: 'NUMERIC',
-         13: 'SUBOPTIMAL',
-         14: 'INPROGRESS',
-         15: 'USER_OBJ_LIMIT'}
-
 
 class Master:
     def __init__(self, data):
-        self.I = data['n_mgs']
-        self.HL = data['HL']
+        self.N = data['N']
+        self.T = data['T']
         self.fsrr = data['fsrr']
         self.usrr = data['usrr']
         self.TFS = data['TFS']
@@ -37,10 +21,10 @@ class Master:
         self.model.setParam('MIPGap', 1e-4)
 
         # auxiliary variables e_hat, pi_hat
-        self.e_buy_hat = self.model.addMVar((self.I, self.I, self.HL), name='e_buy_hat')
-        self.e_sell_hat = self.model.addMVar((self.I, self.I, self.HL), name='e_sell_hat')
-        self.pi_buy_hat = self.model.addMVar((self.I, self.I, self.HL), name='pi_buy_hat')
-        self.pi_sell_hat = self.model.addMVar((self.I, self.I, self.HL), name='pi_sell_hat')
+        self.e_buy_hat = self.model.addMVar((self.N, self.N, self.T), name='e_buy_hat')
+        self.e_sell_hat = self.model.addMVar((self.N, self.N, self.T), name='e_sell_hat')
+        self.pi_buy_hat = self.model.addMVar((self.N, self.N, self.T), name='pi_buy_hat')
+        self.pi_sell_hat = self.model.addMVar((self.N, self.N, self.T), name='pi_sell_hat')
         self.fsrr_slack = self.model.addVar(name='fsrr_slack')
         self.usrr_slack = self.model.addVar(name='usrr_slack')
 
@@ -48,18 +32,18 @@ class Master:
         self.yhat = np.array([mvar.tolist() for mvar in stacked_trades], dtype=object)
 
         # constraints
-        for i in range(self.I):
+        for i in range(self.N):
             self.model.addConstr(self.e_sell_hat[i, i].sum() + self.e_buy_hat[i, i].sum() == 0, name='self_trade')
-            for j in range(self.I):
-                for t in range(self.HL):
+            for j in range(self.N):
+                for t in range(self.T):
                     self.model.addConstr(self.e_buy_hat[i, j, t] - self.e_sell_hat[j, i, t] == 0, name='e_clear')
                     self.model.addConstr(self.pi_buy_hat[i, j, t] - self.pi_sell_hat[j, i, t] == 0, name='pi_clear')
 
         self.model.addConstr(
-            sum(self.pi_buy_hat[i] * self.fsrr[i] for i in range(self.I)) +
+            sum(self.pi_buy_hat[i] * self.fsrr[i] for i in range(self.N)) +
             self.fsrr_slack == self.TFS, name='TFS')
         self.model.addConstr(
-            sum(self.u_cost * self.usrr[i] * (self.e_buy_hat[i] + self.e_sell_hat[i]) for i in range(self.I)) +
+            sum(self.u_cost * self.usrr[i] * (self.e_buy_hat[i] + self.e_sell_hat[i]) for i in range(self.N)) +
             self.usrr_slack == self.TUS, name='TUS')
         self.model.update()
 

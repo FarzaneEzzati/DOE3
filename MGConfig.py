@@ -7,8 +7,8 @@ class MG_config:
         self.C_t_min = data['C_t_min']
         self.C_t_max = data['C_t_max']
         self.id = data['id']
-        self.I = data['n_mgs']
-        self.HL = data['HL']
+        self.N = data['N']
+        self.T = data['T']
         self.S = data['n_scen']
         self.probs = data['probs']
         self.load = data['l_s']
@@ -31,13 +31,13 @@ class MG_config:
         self.tau_cutoff = self.tau + self.sv * (1 - self.tau)
         self.eta_r_Non = None
         self.eta_c_Non = None
-        self.M = 1000
+        self.M = 100
         self.es_cost = data['es_cost']
         self.dg_cost = data['dg_cost']
         self.shed_penalty = data['lsp']
         self.utility_cost = data['u_cost']
 
-        self.i_index = range(self.I)
-        self.t_index = range(self.HL)
+        self.n_index = range(self.N)
+        self.t_index = range(self.T)
         self.s_index = range(self.S)
 

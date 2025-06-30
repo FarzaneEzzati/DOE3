@@ -7,26 +7,26 @@ import numpy as np
 import math
 
 
-def getMGData(n_mgs, id, horizon_len):
+def getMGData(N, id, T):
     data = pd.read_csv('SystemInfo\data_microgrids.csv', index_col='mg number')
     private_data = {c: data[c].iloc[id] for c in data.columns}
-    private_data['n_mgs'] = n_mgs
+    private_data['N'] = N
     private_data['id'] = id
-    private_data['HL'] = horizon_len
-
+    private_data['T'] = T
+    private_data['alpha'] = 0
     # scenario data
     private_data['probs'] = np.array(pd.read_csv(f'SystemInfo/Probs.csv')['prob'].values)
     private_data['n_scen'] = len(private_data['probs'])
     sd = pd.read_csv(f'SystemInfo/PV_{id}.csv')
-    private_data['pv_hourly'] = sd[f'scen0'].values[:horizon_len]
+    private_data['pv_hourly'] = sd[f'scen0'].values[:T]
     sd = pd.read_csv(f'SystemInfo/Load_{id}.csv')
     private_data['l_s'] = np.array([private_data['n_households'] *
-                                    np.array(sd[f'scen{s}'].values[:horizon_len])
+                                    np.array(sd[f'scen{s}'].values[:T])
                                     for s in range(private_data['n_scen'])])
     # max load
     private_data['l_max'] = np.max(private_data['l_s'])
     private_data['l_mean'] = np.average(private_data['l_s'],
-                                        weights=private_data['probs'], axis=0)[:horizon_len]
+                                        weights=private_data['probs'], axis=0)[:T]
 
     # regulatory data
     rd = pd.read_csv(f'SystemInfo/data_regulatory.csv')
@@ -50,10 +50,13 @@ def getMGData(n_mgs, id, horizon_len):
     return private_data, public_data
 
 
-def getCEMSData(num_mgs, mg_public, horizon_len):
+def getCEMSData(N, T, mg_public, mg_private):
     d = {}
-    d['n_mgs'] = num_mgs
-    d['HL'] = horizon_len
+    d['N'] = N
+    d['T'] = T
+    sum_exp = sum(np.exp([temp['sv'] for temp in mg_private.values()]))
+    for temp in mg_private.values():
+        temp['alpha'] = np.exp(temp['sv']) / sum_exp
     d['fsrr'] = [mg_public[mg_id]['fsrr'] for mg_id in mg_public.keys()]
     d['usrr'] = [mg_public[mg_id]['usrr'] for mg_id in mg_public.keys()]
     rd = pd.read_csv(f'SystemInfo/data_regulatory.csv')

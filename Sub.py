@@ -8,13 +8,12 @@ class Sub:
     def __init__(self, data, trade, MIP=False):
         # Initialize
         self.config = MG_config(data)
-
-        self.model = gp.Model(f'MG({self.config.mg_id})')
+        self.model = gp.Model(f'MG({self.config.id})')
         self.model.setParam("OutputFlag", 0)
 
         # Buy/sell mode
         if MIP:
-            self.x = self.model.addVars(self.config.HL, vtype=GRB.BINARY, name='u')
+            self.x = self.model.addVars(self.config.T, vtype=GRB.BINARY, name='u')
             self.model.setParam("Threads", 3)
             self.model.setParam("TimeLimit", 60)
             self.model.setParam("MIPGap", 0.01)
@@ -22,24 +21,24 @@ class Sub:
             self.model.setParam("FeasibilityTol", 1e-3)  # Increase feasibility tolerance
             self.model.setParam("Cuts", 2)
         else:
-            self.x = self.model.addVars(self.config.HL, lb=0, ub=1, name='u')
+            self.x = self.model.addVars(self.config.T, lb=0, ub=1, name='u')
         # Trading variables
-        self.e_buy = self.model.addMVar((self.config.I, self.config.HL), name='e_buy')
-        self.e_sell = self.model.addMVar((self.config.I, self.config.HL), name='e_sell')
-        self.pi_buy = self.model.addMVar((self.config.I, self.config.HL), name='pi_buy')
-        self.pi_sell = self.model.addMVar((self.config.I, self.config.HL), name='pi_sell')
+        self.e_buy = self.model.addMVar((self.config.N, self.config.T), name='e_buy')
+        self.e_sell = self.model.addMVar((self.config.N, self.config.T), name='e_sell')
+        self.pi_buy = self.model.addMVar((self.config.N, self.config.T), name='pi_buy')
+        self.pi_sell = self.model.addMVar((self.config.N, self.config.T), name='pi_sell')
         # Vars for admm
         stacked_trades = np.stack((self.e_buy, self.e_sell, self.pi_buy, self.pi_sell), axis=0)
         self.y = np.array([mvar.tolist() for mvar in stacked_trades], dtype=object)
 
         # Device variables
-        self.g_pv = self.model.addMVar((self.config.S, self.config.HL), name='g_pv')
-        self.g_dg =  self.model.addMVar((self.config.S, self.config.HL), name='g_dg')
-        self.l_m =  self.model.addMVar((self.config.S, self.config.HL), name='l_m')
-        self.r_c =  self.model.addMVar((self.config.S, self.config.HL), name='r_c')
-        self.r_d =  self.model.addMVar((self.config.S, self.config.HL), name='r_d')
-        self.e_l =  self.model.addMVar((self.config.S, self.config.HL), name='e_l')
-        self.l_sh =  self.model.addMVar((self.config.S, self.config.HL), name='l_sh')
+        self.g_pv = self.model.addMVar((self.config.S, self.config.T), name='g_pv')
+        self.g_dg =  self.model.addMVar((self.config.S, self.config.T), name='g_dg')
+        self.l_m =  self.model.addMVar((self.config.S, self.config.T), name='l_m')
+        self.r_c =  self.model.addMVar((self.config.S, self.config.T), name='r_c')
+        self.r_d =  self.model.addMVar((self.config.S, self.config.T), name='r_d')
+        self.e_l =  self.model.addMVar((self.config.S, self.config.T), name='e_l')
+        self.l_sh =  self.model.addMVar((self.config.S, self.config.T), name='l_sh')
         # Resilience and financial benefits
         self.eta_r = self.model.addVar(ub=1, name='eta_r')
         self.eta_c = self.model.addVar(ub=1, name='eta_c')
@@ -52,19 +51,19 @@ class Sub:
         self.C_e = self.model.addVar(lb=-float('inf'), name='C_e')
         self.C_t = self.model.addVar(lb=-float('inf'), name='C_t')
         # Slacks
-        self.e_buy_slack = self.model.addMVar((self.config.I, self.config.HL))
-        self.e_sell_slack = self.model.addMVar((self.config.I, self.config.HL))
-        self.pi_buy_slack_min = self.model.addMVar((self.config.I, self.config.HL))
-        self.pi_sell_slack_min = self.model.addMVar((self.config.I, self.config.HL))
-        self.pi_buy_slack_max = self.model.addMVar((self.config.I, self.config.HL))
-        self.pi_sell_slack_max = self.model.addMVar((self.config.I, self.config.HL))
+        self.e_buy_slack = self.model.addMVar((self.config.N, self.config.T), lb=0)
+        self.e_sell_slack = self.model.addMVar((self.config.N, self.config.T), lb=0)
+        self.pi_buy_slack_min = self.model.addMVar((self.config.N, self.config.T), lb=0)
+        self.pi_sell_slack_min = self.model.addMVar((self.config.N, self.config.T), lb=0)
+        self.pi_buy_slack_max = self.model.addMVar((self.config.N, self.config.T), lb=0)
+        self.pi_sell_slack_max = self.model.addMVar((self.config.N, self.config.T), lb=0)
 
-        self.g_pv_slack = self.model.addMVar((self.config.S, self.config.HL))
-        self.g_dg_slack = self.model.addMVar((self.config.S, self.config.HL))
-        self.l_m_slack = self.model.addMVar((self.config.S, self.config.HL))
-        self.r_c_slack = self.model.addMVar((self.config.S, self.config.HL))
-        self.r_d_slack = self.model.addMVar((self.config.S, self.config.HL))
-        self.e_l_slack = self.model.addMVar((self.config.S, self.config.HL))
+        self.g_pv_slack = self.model.addMVar((self.config.S, self.config.T))
+        self.g_dg_slack = self.model.addMVar((self.config.S, self.config.T))
+        self.l_m_slack = self.model.addMVar((self.config.S, self.config.T))
+        self.r_c_slack = self.model.addMVar((self.config.S, self.config.T))
+        self.r_d_slack = self.model.addMVar((self.config.S, self.config.T))
+        self.e_l_slack = self.model.addMVar((self.config.S, self.config.T))
 
 
         self.eta_r_slack = self.model.addVar(ub=1)
@@ -86,7 +85,6 @@ class Sub:
 
             if self.model.status == GRB.INFEASIBLE:
                 self.show_infeasible_const()
-
             self.eta_r_Non = self.eta_r.x
             self.eta_c_Non = self.eta_c.x
 
@@ -105,7 +103,7 @@ class Sub:
         # self trade
         self.model.addConstr(self.e_sell[self.config.id].sum() + self.e_buy[self.config.id].sum() == 0, name=f'self')
         # trade
-        for j in self.config.i_index:
+        for j in self.config.n_index:
             for t in self.config.t_index:
                 self.model.addConstr(self.e_buy[j, t] + self.e_buy_slack[j, t] == self.x[t] * self.config.M,
                                       name=f'buy_mode[{j},{t}]')
@@ -134,11 +132,11 @@ class Sub:
                 self.model.addConstr(self.e_l[s, t] + self.e_l_slack[s, t] == self.config.es_capacity,
                                      name=f'l limit[{s},{t}]')
                 self.model.addConstr(self.l_sh[s, t] == self.config.load[s, t] - self.l_m[s, t],
-                                     name='load_shed[{s},{t}]')
+                                     name=f'load_shed[{s},{t}]')
                 self.model.addConstr(self.l_m[s, t] + self.r_c[s, t] + self.e_sell[:, t].sum() ==
                                      self.g_pv[s, t] + self.g_dg[s, t] + self.r_d[s, t] + self.e_buy[:, t].sum(),
                                      name=f'balance[{s},{t}]')
-                if t < self.config.HL-1:
+                if t < self.config.T-1:
                     self.model.addConstr(
                         self.e_l[s, t + 1] == self.e_l[s, t] +
                         self.r_c[s, t] * self.config.es_charge -
@@ -188,12 +186,47 @@ class Sub:
         lag_y = l_y * y_minus_yhat + 0.5 * rho_y * y_minus_yhat ** 2
         lag_y_sum = lag_y.sum()
         # x part
-        x_minus_z = self.x.values() - z
+        x = np.array([var for _, var in self.x.items()])
+        x_minus_z = x - z
         lag_z = l_z * x_minus_z + 0.5 * rho_z * x_minus_z ** 2
         lag_z_sum = lag_z.sum()
         # Objective
         self.obj_lagrangian = lag_y_sum + lag_z_sum
-        self.model.setObjective(1000 * self.fixed_obj + self.obj_lagrangian, sense=GRB.MINIMIZE)
+        self.model.setObjective(10000 * self.fixed_obj + self.obj_lagrangian, sense=GRB.MINIMIZE)
+        self.model.update()
+
+        try:
+            self.model.optimize()
+        except gp.GurobiError as e:
+            print(f"Gurobi Error: {e}")
+
+        # Return y is model optimal or timed out, o.w. interrupt
+        if self.model.Status == GRB.OPTIMAL or self.model.SolCount > 0:
+            y_opt = np.stack([self.e_buy.x,
+                          self.e_sell.x,
+                          self.pi_buy.x,
+                          self.pi_sell.x])
+            u_opt = np.array([x.x for x in self.x.values()])
+            return y_opt, u_opt
+        else:
+            print(self.model.Status)
+            print('Separation stopped.')
+
+    def solve_with_lp(self, yhat, l_y, rho_y, z1, l_z1, rho_z1, z2, l_z2, rho_z2):
+        # yhat part
+        y_minus_yhat = self.y - yhat
+        lag_y = l_y * y_minus_yhat + 0.5 * rho_y * y_minus_yhat ** 2
+        lag_y_sum = lag_y.sum()
+        # x part
+        x = np.array([var for _, var in self.x.items()])
+        x_minus_z1 = x - z1
+        lag_z1 = l_z1 * x_minus_z1 + 0.5 * rho_z1 * x_minus_z1 ** 2
+        x_minus_z2 = x - z2
+        lag_z2 = l_z2 * x_minus_z2 + 0.5 * rho_z2 * x_minus_z2 ** 2
+        lag_z_sum = lag_z1.sum() + lag_z2.sum()
+        # Objective
+        self.obj_lagrangian = lag_y_sum + lag_z_sum
+        self.model.setObjective(10000 * self.fixed_obj + self.obj_lagrangian, sense=GRB.MINIMIZE)
         self.model.update()
 
         try:
@@ -217,7 +250,7 @@ class Sub:
         self.model.computeIIS()
         for c in self.model.getConstrs():
             if c.IISConstr:
-                print('infeasible constr: ', c.ConstrName)
+                print(f'{self.config.id} infeasible constr: ', c.ConstrName)
 
     def save_solutions(self, yhat, l_y, rho_y, z, l_z, rho_z, name):
         _ = self.solve_with(yhat=yhat, l_y=l_y, rho_y=rho_y, z=z, l_z=l_z, rho_z=rho_z)
@@ -247,7 +280,7 @@ class Sub:
             'C_e': self.C_e.x,
             'C_t': self.C_t.x}
 
-        with open(f'Results/{name}_MG({self.config.mg_id}).pkl', 'wb') as handle:
+        with open(f'Results/{name}_MG({self.config.id}).pkl', 'wb') as handle:
             pickle.dump([vars_to_save, costs_to_save], handle)
 
 

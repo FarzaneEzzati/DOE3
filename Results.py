@@ -107,37 +107,35 @@ def plot_load_served(results_after, quantile, name_to_save):
         plt.close()
 
 
-def plot_price(results_after: Dict[int, MGResults], name_to_save):
-    buy = np.stack([result.get_buy() for result in results_after.values()])
-    sell = np.stack([result.get_sell() for result in results_after.values()])
+def plot_trade(results_after: Dict[int, MGResults], name_to_save):
+    buy = np.stack([result.vars['e_buy'] for result in results_after.values()])
+    sell = np.stack([result.vars['e_sell'] for result in results_after.values()])
     buy_sell = buy - sell
-    buy_sell = np.average(buy_sell, axis=1)
+    buy_sell = np.sum(buy_sell, axis=1)
     buy_sell = np.concatenate((buy_sell, buy_sell[:, -1][:, np.newaxis]), axis=1)
 
-    fig, axs = plt.subplots(1, 3, figsize=(18, 4))
-    x, y, c = range(25), buy_sell, ['orange', 'red', 'blue']
-    plt.rcParams['font.size'] = 14
+    plt.rcParams['font.size'] = 12
     for n in results_after.keys():
-        axs[n].step(x, y[n], where='post', color=c[n], label=f'MG {n}')
-        axs[n].fill_between(x, y[n], 0, step='post', color=c[n], alpha=0.3)
-    for n, ax in enumerate(axs):
-        ax.set_xticks(np.linspace(0, 24, 13))
-        ax.plot([0, 24], [0, 0], ':', color='black')
-        ax.set_ylabel('Payment ($)')
-        ax.set_xlabel('Time')
-        ax.set_ylim([-4, 4])
-        ax.set_title(f'MG {n+1}')
-
-
-    plt.savefig(f'Figures/{name_to_save}price.jpg', bbox_inches='tight', dpi=600)
-
+        x, y, c = range(25), buy_sell[n], ['orange', 'red', 'blue']
+        fig = plt.figure()
+        plt.step(x, y, where='post', color=c[n], label=f'MG {n}')
+        plt.fill_between(x, y, 0, step='post', color=c[n], alpha=0.3)
+        plt.xticks(np.linspace(0, 24, 13))
+        plt.plot([0, 24], [0, 0], ':', color='black')
+        plt.ylabel('(kW/h)')
+        plt.xlabel('Time')
+        plt.ylim([-60, 50])
+        plt.title(f'MG {n+1}')
+        plt.savefig(f'Figures/{name_to_save}price(MG{n}).jpg', bbox_inches='tight', dpi=600)
+        plt.close()
 
 def get_cost_table(results_before, results_after: Dict[int, MGResults], num_mgs, name_to_save):
     indices = [f'Community {i}' for i in range(num_mgs)] + ['System']
     table = {key: np.zeros(num_mgs) for key in ['Cost Before Trade ($)',
                                                         'Cost After Trade ($)',
                                                         'Utility Fee ($)',
-                                                        'Payments ($)',
+                                                        'Sell Paid ($)',
+                                                        'Buy Paid ($)',
                                                         'Utility Subsidy Usage ($)',
                                                         'Purchase Subsidy Usage ($)',
                                                         'Net Cost After Trade']}
@@ -145,7 +143,8 @@ def get_cost_table(results_before, results_after: Dict[int, MGResults], num_mgs,
         table['Cost Before Trade ($)'][i] = results_before[i].get_opr_cost()
         table['Cost After Trade ($)'][i] = results_after[i].get_opr_cost()
         table['Utility Fee ($)'][i] = results_after[i].get_utility_cost()
-        table['Payments ($)'][i] = results_after[i].get_payments()
+        table['Sell Paid ($)'][i] = results_after[i].vars['pi_sell'].sum()
+        table['Buy Paid ($)'][i] = results_after[i].vars['pi_buy'].sum()
         table['Utility Subsidy Usage ($)'][i] = results_after[i].get_utility_subsidy_usage()
         table['Purchase Subsidy Usage ($)'][i] = results_after[i].get_purchase_subsidy_usage()
         table['Net Cost After Trade'][i] = results_after[i].get_net_cost()

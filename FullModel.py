@@ -7,8 +7,8 @@ from MGConfig import MG_config
 class FullModel:
     def __init__(self, mg_data: dict, cems_data: dict):
         self.configs = [MG_config(data) for data in mg_data.values()]
-        self.I = self.configs[0].I
-        self.HL = self.configs[0].HL
+        self.N = self.configs[0].N
+        self.T = self.configs[0].T
         self.S = self.configs[0].S
         self.TFS = cems_data['TFS']
         self.TUS = cems_data['TUS']
@@ -16,37 +16,43 @@ class FullModel:
         self.tau_cutoff = [config.tau_cutoff for config in self.configs]
 
         self.model = gp.Model('FullModel')
-        self.model.setParam('OutputFlag', 0)
+        self.model.setParam('OutputFlag', 1)
+        self.model.setParam("Threads", 3)
+        self.model.setParam("TimeLimit", 120)
+        self.model.setParam("MIPGap", 0.001)
+        self.model.setParam("NumericFocus", 2)  # Prioritize numerical stability
+        self.model.setParam("FeasibilityTol", 1e-3)  # Increase feasibility tolerance
+        self.model.setParam("Cuts", 2)
 
         # Buy/sell mode
-        self.u = self.model.addMVar((self.I, self.HL), vtype=GRB.BINARY, name='u')
+        self.u = self.model.addMVar((self.N, self.T), vtype=GRB.BINARY, name='u')
         # Trading variables
-        self.e_buy = self.model.addMVar((self.I, self.I, self.HL), name='e_buy')  # energy traded
-        self.e_sell = self.model.addMVar((self.I, self.I, self.HL), name='e_sell')  # energy traded
-        self.pi_buy = self.model.addMVar((self.I, self.I, self.HL), name='pi_buy')  # energy traded
-        self.pi_sell = self.model.addMVar((self.I, self.I, self.HL), name='pi_sell')  # energy traded
+        self.e_buy = self.model.addMVar((self.N, self.N, self.T), name='e_buy')  # energy traded
+        self.e_sell = self.model.addMVar((self.N, self.N, self.T), name='e_sell')  # energy traded
+        self.pi_buy = self.model.addMVar((self.N, self.N, self.T), name='pi_buy')  # energy traded
+        self.pi_sell = self.model.addMVar((self.N, self.N, self.T), name='pi_sell')  # energy traded
         # Device variables
-        self.g_pv = self.model.addMVar((self.I, self.S, self.HL), name='g_pv')  # generation by pv devices
-        self.g_dg = self.model.addMVar((self.I, self.S, self.HL), name='g_dg')  # generation by dg devices
-        self.l_m = self.model.addMVar((self.I, self.S, self.HL), name='l_m')  # load met
-        self.r_c = self.model.addMVar((self.I, self.S, self.HL), name='r_c')  # charging amount
-        self.r_d = self.model.addMVar((self.I, self.S, self.HL), name='r_d')  # discharging amount
-        self.e_l = self.model.addMVar((self.I, self.S, self.HL), name='e_l')  # energy level at es
-        self.l_sh = self.model.addMVar((self.I, self.S, self.HL), name='l_sh')    # load shed
+        self.g_pv = self.model.addMVar((self.N, self.S, self.T), name='g_pv')  # generation by pv devices
+        self.g_dg = self.model.addMVar((self.N, self.S, self.T), name='g_dg')  # generation by dg devices
+        self.l_m = self.model.addMVar((self.N, self.S, self.T), name='l_m')  # load met
+        self.r_c = self.model.addMVar((self.N, self.S, self.T), name='r_c')  # charging amount
+        self.r_d = self.model.addMVar((self.N, self.S, self.T), name='r_d')  # discharging amount
+        self.e_l = self.model.addMVar((self.N, self.S, self.T), name='e_l')  # energy level at es
+        self.l_sh = self.model.addMVar((self.N, self.S, self.T), name='l_sh')    # load shed
         # Resilience and financial benefits
-        self.eta_r = self.model.addMVar(self.I, ub=1, name='eta_r')
-        self.eta_c = self.model.addMVar(self.I, ub=1, name='eta_c')
+        self.eta_r = self.model.addMVar(self.N, ub=1, name='eta_r')
+        self.eta_c = self.model.addMVar(self.N, ub=1, name='eta_c')
         # Costs
-        self.C_es = self.model.addMVar(self.I, name='C_es')
-        self.C_sh = self.model.addMVar(self.I, name='C_ls')
-        self.C_dg = self.model.addMVar(self.I, name='C_dg')
-        self.C_u = self.model.addMVar(self.I, name='C_u')
-        self.C_r = self.model.addMVar(self.I, name='C_r')
-        self.C_e = self.model.addMVar(self.I, lb=-float('inf'), name='C_e')
-        self.C_t = self.model.addMVar(self.I, lb=-float('inf'), name='C_t')
-        self.purchase_subsidy = [0 for _ in range(self.I)]
+        self.C_es = self.model.addMVar(self.N, name='C_es')
+        self.C_sh = self.model.addMVar(self.N, name='C_ls')
+        self.C_dg = self.model.addMVar(self.N, name='C_dg')
+        self.C_u = self.model.addMVar(self.N, name='C_u')
+        self.C_r = self.model.addMVar(self.N, name='C_r')
+        self.C_e = self.model.addMVar(self.N, lb=-float('inf'), name='C_e')
+        self.C_t = self.model.addMVar(self.N, lb=-float('inf'), name='C_t')
+        self.purchase_subsidy = [0 for _ in range(self.N)]
 
-        for i in range(self.I):
+        for i in range(self.N):
             ####### available power of devices
             max_r_c = self.configs[i].es_charge * self.configs[i].es_capacity
             max_r_d = self.configs[i].es_discha * self.configs[i].es_capacity
@@ -61,8 +67,8 @@ class FullModel:
             self.model.addConstr(self.eta_r[i] == eta_r, name=f'eta_r{i}')
             self.model.addConstr(self.eta_c[i] == eta_c, name=f'eta_c{i}')
             # hourly trade
-            for j in range(self.I):
-                for t in range(self.HL):
+            for j in range(self.N):
+                for t in range(self.T):
                     self.model.addConstr(self.e_buy[i, j, t] <= self.u[i, t] * self.configs[i].M,
                                          name=f'buy_mode[{i},{j},{t}]')
                     self.model.addConstr(self.e_sell[i, j, t] <= (1 - self.u[i, t]) * self.configs[i].M,
@@ -91,7 +97,7 @@ class FullModel:
             ####### scheduling
             for s in range(self.S):
                 self.model.addConstr(self.e_l[i, s, 0] == self.configs[i].es_capacity)
-                for t in range(self.HL):
+                for t in range(self.T):
                     max_g_pv = self.configs[i].pv_capacity * self.configs[i].pv_hourly[t]
                     self.model.addConstr(self.g_pv[i, s, t] <= max_g_pv, name=f'g_pv_limit[{i},{s},{t}]')
                     self.model.addConstr(self.g_dg[i, s, t] <= max_g_dg, name=f'g_dg_limit[{i},{s},{t}]')
@@ -107,7 +113,7 @@ class FullModel:
                     power_output = self.l_m[i, s, t] + self.r_c[i, s, t] + self.e_sell[i, :, t].sum()
                     self.model.addConstr(power_output == power_input, name=f'balance[{i},{s},{t}]')
 
-                    if t < self.HL - 1:
+                    if t < self.T - 1:
                         es_level_change = self.e_l[i, s, t] + self.r_c[i, s, t] * self.configs[i].es_charge - \
                                           self.r_d[i, s, t] / self.configs[i].es_discha
                         self.model.addConstr(self.e_l[i, s, t + 1] == es_level_change, name=f'flow[{i},{s},{t}]')
@@ -141,17 +147,17 @@ class FullModel:
             self.model.addConstr(self.C_t[i] == C_t)
 
         # Subsidies
-        purchase_subsidy_used = sum(self.pi_buy[i].sum() * self.configs[i].fsrr for i in range(self.I))
+        purchase_subsidy_used = sum(self.pi_buy[i].sum() * self.configs[i].fsrr for i in range(self.N))
         utility_subsidy_used = sum(self.configs[i].utility_cost * self.configs[i].usrr *
                                    (self.e_buy[i].sum() + self.e_sell[i].sum())
-                                   for i in range(self.I))
+                                   for i in range(self.N))
         self.model.addConstr(purchase_subsidy_used <= self.TFS, name='TFS')
         self.model.addConstr(utility_subsidy_used <= self.TUS, name='TUS')
 
         # Objective
         self.objective = sum((self.configs[i].alpha *
                               (self.configs[i].theta_r * self.eta_r[i] +
-                               self.configs[i].theta_c * self.eta_c[i]) for i in range(self.I)))
+                               self.configs[i].theta_c * self.eta_c[i]) for i in range(self.N)))
         self.model.setObjective(self.objective, sense=GRB.MAXIMIZE)
 
         # Trade off baseline
@@ -164,7 +170,7 @@ class FullModel:
 
         self.model.remove(trade_off_constr)
 
-        for i in range(self.I):
+        for i in range(self.N):
             self.model.addConstr(self.eta_r[i] >= self.tau_cutoff[i] * self.eta_r_Non[i])
             self.model.addConstr(self.eta_c[i] >= self.tau_cutoff[i] * self.eta_c_Non[i])
         self.model.update()
