@@ -1,5 +1,10 @@
-,Resilience Before Trade,Cost Before Trade,Resilience After Trade,Cost After Trade
-Community 0,0.51,0.40,0.53,0.40
-Community 1,0.61,0.51,0.73,0.55
-Community 2,0.58,0.52,0.52,0.48
-System,0.57,0.48,0.59,0.48
+,Resilience Before Trade,Cost Before Trade,Resilience After Trade,Cost After Trade,
+Community 0,0.510,0.399,0.533,0.415,
+Community 1,0.610,0.506,0.632,0.514,
+Community 2,0.581,0.522,0.546,0.500,
+System,0.567,0.475,0.571,0.476,
+,,,,,
+,,,,,
+,,,,,
+,,,,,
+,,,,,

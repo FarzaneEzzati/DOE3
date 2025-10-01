@@ -18,7 +18,7 @@ class Sub:
             self.model.setParam("TimeLimit", 60)
             self.model.setParam("MIPGap", 0.01)
             self.model.setParam("NumericFocus", 1)  # Prioritize numerical stability
-            self.model.setParam("FeasibilityTol", 1e-3)  # Increase feasibility tolerance
+            self.model.setParam("FeasibilityTol", 1e-4)  # Increase feasibility tolerance
             self.model.setParam("Cuts", 2)
         else:
             self.x = self.model.addVars(self.config.T, lb=0, ub=1, name='u')
@@ -66,8 +66,8 @@ class Sub:
         self.e_l_slack = self.model.addMVar((self.config.S, self.config.T))
 
 
-        self.eta_r_slack = self.model.addVar(ub=1)
-        self.eta_c_slack = self.model.addVar(ub=1)
+        self.eta_r_slack = self.model.addVar(lb=0, ub=1)
+        self.eta_c_slack = self.model.addVar(lb=0, ub=1)
 
         # Constraints
         self.addConstraints()
@@ -90,8 +90,8 @@ class Sub:
 
             self.model.remove(trade_off_constr)
 
-            self.model.addConstr(self.eta_r - self.eta_r_slack == self.config.tau_cutoff * self.eta_r_Non, name='res_improve')
-            self.model.addConstr(self.eta_c - self.eta_c_slack == self.config.tau_cutoff * self.eta_c_Non, name='cost_improve')
+            self.model.addConstr(self.eta_r - self.eta_r_slack == self.config.tau * self.eta_r_Non, name='res_improve')
+            self.model.addConstr(self.eta_c - self.eta_c_slack == self.config.tau * self.eta_c_Non, name='cost_improve')
             self.model.update()
         else:
             self.model.addConstr(self.e_buy.sum() + self.e_sell.sum() == 0, name='trade_off')
@@ -270,7 +270,7 @@ class Sub:
             'x': np.array([x.x for x in self.x.values()]),
             'eta_r': self.eta_r.x,
             'eta_c': self.eta_c.x,
-            'tau_cutoff': self.config.tau_cutoff
+            'tau': self.config.tau
         }
         costs_to_save = {
             'C_es': self.C_es.x,
@@ -278,7 +278,8 @@ class Sub:
             'C_dg': self.C_dg.x,
             'C_u': self.C_u.x,
             'C_e': self.C_e.x,
-            'C_t': self.C_t.x}
+            'C_t': self.C_t.x,
+            'C_r': self.C_r.x}
 
         with open(f'Results/{name}_MG({self.config.id}).pkl', 'wb') as handle:
             pickle.dump([vars_to_save, costs_to_save], handle)

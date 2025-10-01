@@ -28,7 +28,7 @@ class MG_config:
         self.sv = data['sv']
         self.e_load = (1 + data['wtp']) * data['e_grid']
         self.tau = 0.9
-        self.tau_cutoff = self.tau + self.sv * (1 - self.tau)
+        #self.tau_cutoff = self.tau + self.sv * (1 - self.tau)
         self.eta_r_Non = None
         self.eta_c_Non = None
         self.M = 100
