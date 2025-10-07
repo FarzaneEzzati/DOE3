@@ -51,12 +51,12 @@ class Sub:
         self.C_e = self.model.addVar(lb=-float('inf'), name='C_e')
         self.C_t = self.model.addVar(lb=-float('inf'), name='C_t')
         # Slacks
-        self.e_buy_slack = self.model.addMVar((self.config.N, self.config.T), lb=0)
-        self.e_sell_slack = self.model.addMVar((self.config.N, self.config.T), lb=0)
-        self.pi_buy_slack_min = self.model.addMVar((self.config.N, self.config.T), lb=0)
-        self.pi_sell_slack_min = self.model.addMVar((self.config.N, self.config.T), lb=0)
-        self.pi_buy_slack_max = self.model.addMVar((self.config.N, self.config.T), lb=0)
-        self.pi_sell_slack_max = self.model.addMVar((self.config.N, self.config.T), lb=0)
+        self.e_buy_slack = self.model.addMVar((self.config.N, self.config.T))
+        self.e_sell_slack = self.model.addMVar((self.config.N, self.config.T))
+        self.pi_buy_slack_min = self.model.addMVar((self.config.N, self.config.T))
+        self.pi_sell_slack_min = self.model.addMVar((self.config.N, self.config.T))
+        self.pi_buy_slack_max = self.model.addMVar((self.config.N, self.config.T))
+        self.pi_sell_slack_max = self.model.addMVar((self.config.N, self.config.T))
 
         self.g_pv_slack = self.model.addMVar((self.config.S, self.config.T))
         self.g_dg_slack = self.model.addMVar((self.config.S, self.config.T))
@@ -192,7 +192,7 @@ class Sub:
         lag_z_sum = lag_z.sum()
         # Objective
         self.obj_lagrangian = lag_y_sum + lag_z_sum
-        self.model.setObjective(10000 * self.fixed_obj + self.obj_lagrangian, sense=GRB.MINIMIZE)
+        self.model.setObjective(self.fixed_obj + self.obj_lagrangian, sense=GRB.MINIMIZE)
         self.model.update()
 
         try:

@@ -31,7 +31,7 @@ class MG_config:
         #self.tau_cutoff = self.tau + self.sv * (1 - self.tau)
         self.eta_r_Non = None
         self.eta_c_Non = None
-        self.M = 100
+        self.M = 1000
         self.es_cost = data['es_cost']
         self.dg_cost = data['dg_cost']
         self.shed_penalty = data['lsp']
