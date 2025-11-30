@@ -1,61 +1,46 @@
 import gurobipy as gp
 from gurobipy import GRB, quicksum
 import numpy as np
+from itertools import product
+
+env = gp.Env()
+env.setParam('OutputFlag', 0)
+env.setParam('Method', 2)
+env.setParam("NumericFocus", 3) 
 
 class Master:
-    def __init__(self, data):
-        self.N = data['N']
-        self.T = data['T']
-        self.fsrr = data['fsrr']
-        self.usrr = data['usrr']
-        self.TFS = data['TFS']
-        self.TUS = data['TUS']
-        self.u_cost = data['u_cost']
+    def __init__(self, T, N, data):
+        N_range, T_range = range(N), range(T)
 
-        self.model = gp.Model('Master')
-        self.model.setParam('Method', 0)
-        self.model.setParam('OutputFlag', 0)
-        self.model.setParam('NumericFocus', 1)
-        self.model.setParam('FeasibilityTol', 1e-3)
-        self.model.setParam('Cuts', 3)
-        self.model.setParam('MIPGap', 1e-4)
-
-        # auxiliary variables e_hat, pi_hat
-        self.e_buy_hat = self.model.addMVar((self.N, self.N, self.T), name='e_buy_hat')
-        self.e_sell_hat = self.model.addMVar((self.N, self.N, self.T), name='e_sell_hat')
-        self.pi_buy_hat = self.model.addMVar((self.N, self.N, self.T), name='pi_buy_hat')
-        self.pi_sell_hat = self.model.addMVar((self.N, self.N, self.T), name='pi_sell_hat')
-        self.fsrr_slack = self.model.addVar(name='fsrr_slack')
-        self.usrr_slack = self.model.addVar(name='usrr_slack')
-
-        stacked_trades = np.stack((self.e_buy_hat, self.e_sell_hat, self.pi_buy_hat, self.pi_sell_hat), axis=0)
+        self.model = gp.Model(env=env)
+        # Variables e_hat, pi_hat
+        self.e_b_hat = self.model.addMVar((N, N, T), name='e_b_hat')
+        self.e_s_hat = self.model.addMVar((N, N, T), name='e_s_hat')
+        self.pi_b_hat = self.model.addMVar((N, N, T), name='pi_b_hat')
+        self.pi_s_hat = self.model.addMVar((N, N, T), name='pi_s_hat')
+        stacked_trades = np.stack((self.e_b_hat, self.e_s_hat, self.pi_b_hat, self.pi_s_hat), axis=0)
         self.yhat = np.array([mvar.tolist() for mvar in stacked_trades], dtype=object)
-
-        # constraints
-        for i in range(self.N):
-            self.model.addConstr(self.e_sell_hat[i, i].sum() + self.e_buy_hat[i, i].sum() == 0, name='self_trade')
-            for j in range(self.N):
-                for t in range(self.T):
-                    self.model.addConstr(self.e_buy_hat[i, j, t] - self.e_sell_hat[j, i, t] == 0, name='e_clear')
-                    self.model.addConstr(self.pi_buy_hat[i, j, t] - self.pi_sell_hat[j, i, t] == 0, name='pi_clear')
-
-        self.model.addConstr(
-            sum(self.pi_buy_hat[i] * self.fsrr[i] for i in range(self.N)) +
-            self.fsrr_slack == self.TFS, name='TFS')
-        self.model.addConstr(
-            sum(self.u_cost * self.usrr[i] * (self.e_buy_hat[i] + self.e_sell_hat[i]) for i in range(self.N)) +
-            self.usrr_slack == self.TUS, name='TUS')
+        # Market 
+        for n in N_range:
+            self.model.addConstr(self.e_s_hat[n, n].sum() + self.e_b_hat[n, n].sum() == 0, name='self_trade')
+            for j, t in product(N_range, T_range):
+                self.model.addConstr(self.e_b_hat[n, j, t] - self.e_s_hat[j, n, t] == 0, name='e_clear')
+                self.model.addConstr(self.pi_b_hat[n, j, t] - self.pi_s_hat[j, n, t] == 0, name='pi_clear')
+        # Subsidy
+        fs_used = sum(data['fsrr'][n] * self.pi_b_hat[n].sum()  for n in N_range)
+        us_used = sum(data['u_cost'] * data['fsrr'][n] * (self.e_b_hat[n] + self.e_s_hat[n]).sum() for n in N_range)
+        self.model.addConstr(fs_used <= data['TFS'], name='TFS')
+        self.model.addConstr(us_used <= data['TUS'], name='TUS')
         self.model.update()
 
         self.obj_lagrangian = 0
 
 
-    def solve_with(self, y, rho_y, l_y):
-        y_minus_yhat = y - self.yhat
-        lag_y = l_y * y_minus_yhat + 0.5 * rho_y * y_minus_yhat ** 2
-        lag_y_sum = lag_y.sum()
+    def solve_with(self, y, p_y, l_y):
+        lag_y = - l_y * self.yhat + 0.5 * p_y * (self.yhat ** 2 - 2 * self.yhat * y)
+        lag_y = lag_y.sum()
 
-        self.obj_lagrangian = lag_y_sum
+        self.obj_lagrangian = lag_y
         self.model.setObjective(self.obj_lagrangian, sense=GRB.MINIMIZE)
         self.model.update()
 
@@ -66,14 +51,8 @@ class Master:
             print(f"Gurobi Error: {e}")
 
         # Return z is model optimal or timed out, o.w. interrupt
-        if self.model.status == 2:
-            return self.get_yhat_opt()
+        if self.model.SolCount > 0:
+            y_opt = np.stack([self.e_b_hat.x,self.e_s_hat.x,self.pi_b_hat.x,self.pi_s_hat.x])
+            return y_opt
         else:
-            print(self.model.Status)
-            raise ValueError('Master stopped.')
-
-    def get_yhat_opt(self):
-        return np.stack((self.e_buy_hat.x,
-                         self.e_sell_hat.x,
-                         self.pi_buy_hat.x,
-                         self.pi_sell_hat.x))
+            raise ValueError(f'Master stopped with status {self.model.Status}')

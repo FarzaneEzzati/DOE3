@@ -7,26 +7,17 @@ import numpy as np
 import math
 
 
-def getMGData(N, id, T):
+def getMGData(n):
     data = pd.read_csv('SystemInfo\data_microgrids.csv', index_col='mg number')
-    private_data = {c: data[c].iloc[id] for c in data.columns}
-    private_data['N'] = N
-    private_data['id'] = id
-    private_data['T'] = T
+    private_data = {c: data[c].iloc[n] for c in data.columns}
+    private_data['n'] = n
     private_data['alpha'] = 0
     # scenario data
-    private_data['probs'] = np.array(pd.read_csv(f'SystemInfo/Probs.csv')['prob'].values)
-    private_data['n_scen'] = len(private_data['probs'])
-    sd = pd.read_csv(f'SystemInfo/PV_{id}.csv')
-    private_data['pv_hourly'] = sd[f'scen0'].values[:T]
-    sd = pd.read_csv(f'SystemInfo/Load_{id}.csv')
-    private_data['l_s'] = np.array([private_data['n_households'] *
-                                    np.array(sd[f'scen{s}'].values[:T])
-                                    for s in range(private_data['n_scen'])])
-    # max load
-    private_data['l_max'] = np.max(private_data['l_s'])
-    private_data['l_mean'] = np.average(private_data['l_s'],
-                                        weights=private_data['probs'], axis=0)[:T]
+    sd = pd.read_csv(f'SystemInfo/PV.csv')
+    private_data['pv_hourly'] = sd[f'PV_{n}'].values
+    sd = pd.read_csv(f'SystemInfo/Load.csv')
+    private_data['load'] = sd[f'load_{n}'].values * private_data['n_households']
+    private_data['load_price'] = (1 + private_data['wtp']) * private_data['grid_price']
 
     # regulatory data
     rd = pd.read_csv(f'SystemInfo/data_regulatory.csv')
@@ -35,33 +26,34 @@ def getMGData(N, id, T):
     private_data['PNA_cost'] = rd['PNA_cost'].iloc[0]
     private_data['CO2'] = rd['co2(kg/kwh)'].iloc[0]
 
-
-    private_data['C_t_min'] = -1000
+    private_data['C_t_min'] = -2000
     private_data['C_t_max'] = 2000
 
+    private_data['r_priority'] = 0.75
+    private_data['c_priority'] = 0.25
 
-    subsidy_data = pd.read_csv(f'SystemInfo/data_regulatory.csv')
-    private_data['fsrr'] = subsidy_data['financial subsidy rate'].iloc[0] * (0.5 + private_data['sv']) / 1.5
-    private_data['usrr'] = subsidy_data['utility subsidy rate'].iloc[0] * (0.5 + private_data['sv']) / 1.5
-
-    # public data
-    public_data = {'fsrr':private_data['fsrr'], 'usrr': private_data['usrr']}
+    rd = pd.read_csv(f'SystemInfo/data_regulatory.csv')
+    private_data['fsrr'] = rd['financial subsidy rate'].iloc[0] * (0.5 + private_data['sv']) / 1.5
+    private_data['usrr'] = rd['utility subsidy rate'].iloc[0] * (0.5 + private_data['sv']) / 1.5    
+    private_data['TFS'] = rd['total financial support'].iloc[0]
+    private_data['TUS'] = rd['total utility support'].iloc[0]
+    private_data['u_cost'] = rd['infrastructure-usage(kw)'].iloc[0] + rd['metering(kw)'].iloc[0] + rd['fixed-fees(kw)'].iloc[0]
+    
+    # Public data
+    public_data = {'fsrr':private_data['fsrr'], 
+                   'usrr': private_data['usrr'], 
+                   'TFS': private_data['TFS'],
+                   'TUS': private_data['TUS'],
+                   'u_cost': private_data['u_cost']}
 
     return private_data, public_data
 
 
-def getCEMSData(N, T, mg_public, mg_private):
-    d = {}
-    d['N'] = N
-    d['T'] = T
-    sum_exp = sum(np.exp([temp['sv'] for temp in mg_private.values()]))
-    for temp in mg_private.values():
-        temp['alpha'] = np.exp(temp['sv']) / sum_exp
-    d['fsrr'] = [mg_public[mg_id]['fsrr'] for mg_id in mg_public.keys()]
-    d['usrr'] = [mg_public[mg_id]['usrr'] for mg_id in mg_public.keys()]
-    rd = pd.read_csv(f'SystemInfo/data_regulatory.csv')
-    d['u_cost'] = rd['infrastructure-usage(kw)'].iloc[0] + rd['metering(kw)'].iloc[0] + rd['fixed-fees(kw)'].iloc[0]
-    d['TFS'] = rd['total financial support'].iloc[0]
-    d['TUS'] = rd['total utility support'].iloc[0]
-
-    return d
+def buildCEMSData(public_data):
+    cems_data = {}
+    cems_data['fsrr'] = np.array([mg['fsrr'] for mg in public_data])
+    cems_data['usrr'] = np.array([mg['usrr'] for mg in public_data])
+    cems_data['TFS'] = public_data[0]['TFS']
+    cems_data['TUS'] = public_data[0]['TUS']
+    cems_data['u_cost'] = public_data[0]['u_cost']
+    return cems_data
