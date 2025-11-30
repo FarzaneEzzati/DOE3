@@ -2,7 +2,6 @@ import pickle
 import gurobipy as gp
 from gurobipy import GRB, quicksum
 import numpy as np
-from MGConfig import MG_config
 from itertools import product
 
 env = gp.Env()
