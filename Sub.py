@@ -1,8 +1,12 @@
-import pickle
+'''
+This file contains the class of individual subproblems (microgrids).
+'''
+
 import gurobipy as gp
-from gurobipy import GRB, quicksum
+from gurobipy import GRB
 import numpy as np
 from itertools import product
+import pickle 
 
 env = gp.Env()
 env.setParam("OutputFlag", 0)
@@ -11,21 +15,17 @@ env.setParam("TimeLimit", 60)
 env.setParam("MIPGap", 0.01)
 env.setParam("NumericFocus", 3)  
 env.setParam("FeasibilityTol", 1e-4)  
-env.setParam("Cuts", 2)
+env.setParam("Method", 2)
 
 class Sub:
-    def __init__(self, T, N, data, MIP=False):
+    def __init__(self, T, N, data):
         n = data['n']
         T_range, N_range = range(T), range(N)
         M = 100
 
         self.model = gp.Model(f'MG({n})', env=env)
         # x variables
-        if MIP:
-            self.x = self.model.addVars(T, vtype=GRB.BINARY, name='u')
-        else:
-            self.x = self.model.addMVar(T, lb=0, ub=1, name='x')
-            env.setParam("Method", 2)
+        self.x = self.model.addMVar(T, lb=0, ub=1, name='x')
         # Trading variables
         self.e_b = self.model.addMVar((N, T), name='e_b')
         self.e_s = self.model.addMVar((N, T), name='e_s')
@@ -130,6 +130,7 @@ class Sub:
         self.eta_r_Non = self.eta_r.x
         self.eta_c_Non = self.eta_c.x
         self.C_t_Non = self.C_t.x
+        self.l_sh_Non = self.l_sh.x
         self.model.remove(trade_off_constr)
 
         self.model.addConstr(self.eta_r >= data['tau'] * self.eta_r_Non, name='r_improve')
@@ -139,20 +140,20 @@ class Sub:
         self.obj_lagrangian = 0
         stacked_trades = np.stack((self.e_b, self.e_s, self.pi_b, self.pi_s), axis=0)
         self.y = np.array([mvar.tolist() for mvar in stacked_trades], dtype=object)
-        self.n = n
 
-    def solve_with_var_x(self, yhat, l_y, p_y, z, l_z, p_z):
-        # yhat part
-        lag_y = l_y * (self.y) + 0.5 * p_y * (self.y ** 2 - 2 * self.y * yhat ) 
+    def solve_with(self, yhat, l_y, p_y, z1, l_z1, p_z1, z2, l_z2, p_z2):
+        # Lagrangian part for yhat
+        lag_y = l_y * self.y + 0.5 * p_y * (self.y ** 2 - 2 * self.y * yhat ) 
         lag_y = lag_y.sum()
-        
-        # x part
-        lag_z = l_z * (self.x) + 0.5 * p_z * (self.x ** 2 - 2 * self.x * z )
-        lag_z = lag_z.sum()
+
+        # Lagrangian part for z1 and z2
+        lag_z1 = l_z1 * self.x + 0.5 * p_z1 * (self.x @ self.x - 2 * self.x * z1 )
+        lag_z2 = l_z2 * self.x + 0.5 * p_z2 * (self.x @ self.x - 2 * self.x * z2 )
+        lag_z = (lag_z1 + lag_z2).sum()
 
         # Objective
         self.obj_lagrangian = lag_y + lag_z
-        self.model.setObjective(1e6 * self.obj_fixed + self.obj_lagrangian, sense=GRB.MINIMIZE)
+        self.model.setObjective(self.obj_fixed + self.obj_lagrangian, sense=GRB.MINIMIZE)
         self.model.update()
 
         try:
@@ -160,7 +161,7 @@ class Sub:
         except gp.GurobiError as e:
             print(f"Gurobi Error: {e}")
 
-        # Return y is model optimal or timed out, o.w. interrupt
+        # Return y if sol count > 0
         if self.model.SolCount > 0:
             y_opt = np.stack([self.e_b.x, self.e_s.x, self.pi_b.x, self.pi_s.x])
             x_opt = self.x.x
@@ -168,25 +169,32 @@ class Sub:
         else:
             print(f'{self.model.ModelName} failed with status {self.model.Status}.')
 
-    def solve_with_fixed_x(self, yhat, l_y, p_y):
-        # yhat part
-        lag_y = l_y * (self.y) + 0.5 * p_y * (self.y ** 2 - 2 * self.y * yhat ) 
-        self.obj_lagrangian = lag_y.sum()
-        # Objective
-        self.model.setObjective(1e6 * self.obj_fixed + self.obj_lagrangian, sense=GRB.MINIMIZE)
-        self.model.update()
-
-        try:
-            self.model.optimize()
-        except gp.GurobiError as e:
-            print(f"Gurobi Error: {e}")
-
-        # Return y is model optimal or timed out, o.w. interrupt
-        if self.model.SolCount > 0:
-            y_opt = np.stack([self.e_b.x, self.e_s.x, self.pi_b.x, self.pi_s.x])
-            return y_opt
-        else:
-            print(f'{self.model.ModelName} failed with status {self.model.Status}.')
+    def store_solutions(self, N, T, n):
+        solu = dict(
+            x=self.x.x, 
+            e_b=self.e_b.x,
+            e_s=self.e_s.x,
+            pi_b=self.pi_b.x,
+            pi_s=self.pi_s.x,
+            g_pv=self.g_pv.x,
+            g_dg=self.g_dg.x,
+            l_m=self.l_m.x,
+            l_sh=self.l_sh.x,
+            C_es=self.C_es.x,
+            C_sh=self.C_sh.x,
+            C_r=self.C_r.x,
+            C_dg=self.C_dg.x,
+            C_u=self.C_u.x,
+            C_t=self.C_t.x,
+            eta_r=self.eta_r.x,
+            eta_c=self.eta_c.x,
+            eta_r_Non=self.eta_r_Non,
+            eta_c_Non=self.eta_c_Non,
+            C_t_Non=self.C_t_Non,
+            l_sh_Non=self.l_sh_Non)
+        with open(f'Solution/(N={N},T={T},n={n})solu.pkl', 'wb') as f:
+            pickle.dump(solu, f)
+        
     
     def show_infeasible_const(self):
         self.model.computeIIS()

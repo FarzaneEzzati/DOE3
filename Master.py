@@ -1,3 +1,7 @@
+'''
+This file contains the class of master problem (market clearance entity).
+'''
+
 import gurobipy as gp
 from gurobipy import GRB, quicksum
 import numpy as np
